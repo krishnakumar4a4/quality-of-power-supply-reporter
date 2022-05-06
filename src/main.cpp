@@ -18,9 +18,6 @@ File root;
 void printDirectory(File dir, int numTabs);
 #define CS_PIN D8
 
-#define ledPin 5
-#define onboardLedPin 2
-
 // Setup start: For twitter webclient api
 #include <NTPClient.h>
 #include <TwitterWebAPI.h>
@@ -37,6 +34,8 @@ void publishTweet(time_t epoch);
 int publishCounter = 1;
 std::string& reduce_double_spaces(std::string& s);
 std::string& remove_new_lines(std::string& s);
+
+time_t powerOnTimeInEpoch;
 // Setup End: For twitter webclient api
 
 void setup() {
@@ -44,10 +43,6 @@ void setup() {
     Serial.println(CONSUMER_KEY);
     Serial.print("access token: ");
     Serial.println(ACCESS_TOKEN);
-    pinMode(ledPin, OUTPUT);
-    pinMode(onboardLedPin, OUTPUT);
-    digitalWrite(ledPin, HIGH);
-    digitalWrite(onboardLedPin, HIGH);
     Serial.begin(115200);
     // LittleFS.begin();
     GUI.begin();
@@ -58,6 +53,7 @@ void setup() {
     Serial.println("tcr.startNTP()");
 
     tcr.startNTP();
+    powerOnTimeInEpoch = tcr.getEpoch();
 
     Serial.print("Initializing SD card...");
 
@@ -94,19 +90,15 @@ void loop() {
     WiFiManager.loop();
     updater.loop();
     configManager.loop();
-    time_t epoch = tcr.getEpoch();
+    // time_t epoch = tcr.getEpoch();
     // Serial.println(epoch);
-    if (epoch < 1651363200) {
+    if (powerOnTimeInEpoch < 1651363200) {
         return;
     }
 
     if (publishCounter++ <= 1) {
         Serial.println("Publishing Tweet");
-        publishTweet(epoch);
-        delay(30000);
-        digitalWrite(ledPin, LOW);
-        digitalWrite(onboardLedPin, LOW);
-        Serial.print("TurningOff");
+        publishTweet(powerOnTimeInEpoch);
     }
 
     // delay(60000);
