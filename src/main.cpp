@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include "LittleFS.h"
+// #include "LittleFS.h"
 
 #include "WiFiManager.h"
 #include "webServer.h"
@@ -9,6 +9,14 @@
 #include "timeSync.h"
 
 #include "Config.h"
+
+#include <SPI.h>
+#include <SD.h>
+#include <SdFat.h>
+
+File root;
+void printDirectory(File dir, int numTabs);
+#define CS_PIN D8
 
 #define ledPin 5
 #define onboardLedPin 2
@@ -41,7 +49,7 @@ void setup() {
     digitalWrite(ledPin, HIGH);
     digitalWrite(onboardLedPin, HIGH);
     Serial.begin(115200);
-    LittleFS.begin();
+    // LittleFS.begin();
     GUI.begin();
     configManager.begin();
     WiFiManager.begin("quality-of-power-supply-reporter");
@@ -50,6 +58,36 @@ void setup() {
     Serial.println("tcr.startNTP()");
 
     tcr.startNTP();
+
+    Serial.print("Initializing SD card...");
+
+    bool initFailed = false;
+
+    if (!SD.begin(CS_PIN, SD_SCK_MHZ(1))) {
+        initFailed = true;
+        Serial.println("initialization failed!");
+        Serial.println();
+    }
+
+    delay(500);
+
+    Serial.print("Card type:         ");
+    Serial.println(SD.type());
+    Serial.print("fatType:           ");
+    Serial.println(SD.fatType());
+    Serial.print("size:              ");
+    Serial.println(SD.size());
+
+    Serial.println();
+    if (initFailed) {
+        delay(1000);
+        while (1); // Soft reset
+    }
+
+    Serial.println("initialization done.");
+    root = SD.open("/");
+    printDirectory(root, 0);
+    Serial.println("done!");
 }
 
 void loop() {
@@ -112,4 +150,28 @@ std::string& remove_new_lines(std::string& s)
         pos = s.find("\n", pos);
     }
     return s;
+}
+
+void printDirectory(File dir, int numTabs) {
+  while (true) {
+
+    File entry =  dir.openNextFile();
+    if (! entry) {
+      // no more files
+      break;
+    }
+    for (uint8_t i = 0; i < numTabs; i++) {
+      Serial.print('\t');
+    }
+    Serial.print(entry.name());
+    if (entry.isDirectory()) {
+      Serial.println("/");
+      printDirectory(entry, numTabs + 1);
+    } else {
+      // files have sizes, directories do not
+      Serial.print("\t\t");
+      Serial.println(entry.size(), DEC);
+    }
+    entry.close();
+  }
 }
