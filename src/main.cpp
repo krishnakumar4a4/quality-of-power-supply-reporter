@@ -31,7 +31,9 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, ntp_server, (timezone*3600) + 1800, 60000);  // NTP server pool, offset (in seconds), update interval (in milliseconds)
 TwitterClient tcr(timeClient, CONSUMER_KEY, CONSUMER_SECRET, ACCESS_TOKEN, ACCESS_TOKEN_SECRET);
 
-void publishTweet(time_t epoch);
+int publishTweet(std::string event, time_t epoch);
+int publishPowerOnEvent(time_t epoch);
+int publishPowerOffEvent(time_t epoch);
 int publishCounter = 1;
 std::string& reduce_double_spaces(std::string& s);
 std::string& remove_new_lines(std::string& s);
@@ -39,11 +41,11 @@ std::string& remove_new_lines(std::string& s);
 time_t powerOnTimeInEpoch;
 // Setup End: For twitter webclient api
 
-File getLatestFileByDate(File rootDir, std::string date);
+File getLatestFileByDate(File rootDir, std::string date, time_t epochTime);
 void publishUnpublishedEvents(File rootDir);
 std::vector<std::string> listDirSorted(File rootDir);
-void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus);
-void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus);
+void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus);
+void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus);
 std::string getFilenameFromEpoch(time_t epochTime);
 std::string getTimeOfEventFromEpoch(time_t epochTime);
 boolean isEpochNTPSynced(time_t epoch);
@@ -54,11 +56,11 @@ std::string getLineNumFromStatus(std::vector<std::string> statusVec);
 void persistPubStatusToFile(std::string date, std::string lineNum);
 
 void setup() {
+    Serial.begin(115200);
     Serial.print("consumer key: ");
     Serial.println(CONSUMER_KEY);
     Serial.print("access token: ");
     Serial.println(ACCESS_TOKEN);
-    Serial.begin(115200);
     // LittleFS.begin();
     GUI.begin();
     configManager.begin();
@@ -102,6 +104,11 @@ void setup() {
       SD.mkdir("qop");
       dataRoot = SD.open("/qop");
     }
+    File pubDataRoot = SD.open("/qop-published");
+    if (!pubDataRoot) {
+      SD.mkdir("qop-published");
+    }
+    pubDataRoot.close();
 
     root = SD.open("/");
     printDirectory(root, 0);
@@ -112,36 +119,38 @@ void loop() {
     WiFiManager.loop();
     updater.loop();
     configManager.loop();
-    // if (powerOnTimeInEpoch < 1651363200) {
-    //     return;
-    // }
-
-    // if (publishCounter++ <= 1) {
-    //     Serial.println("Publishing Tweet");
-    //     publishTweet(powerOnTimeInEpoch);
-    // }
-
     std::string datedFilename = getFilenameFromEpoch(powerOnTimeInEpoch);
-
     Serial.println("getting latest file by date");
-    File dateFile = getLatestFileByDate(dataRoot, datedFilename);
+    File dateFile = getLatestFileByDate(dataRoot, datedFilename, powerOnTimeInEpoch);
     if (!dateFile) {
       Serial.println("unable to open latest file for writing");
       return;
     }
+    Serial.print("picked file for writing new events: ");
+    Serial.println(dateFile.fullName());
     // wait for given time and write event to file
     std::string timeOfEvent = getTimeOfEventFromEpoch(powerOnTimeInEpoch);
-    writePowerResumeEventToFile(dateFile, timeOfEvent, isEpochNTPSynced(powerOnTimeInEpoch));
+    writePowerResumeEventToFile(dateFile, timeOfEvent, powerOnTimeInEpoch, isEpochNTPSynced(powerOnTimeInEpoch));
+    std::string lastLoopDate = datedFilename;
     while (true) {
-      delay(60000);
+      delay(10 * 60000); // run every 10mins
       time_t newEpochTime = tcr.getEpoch();
       std::string newTimeOfEvent = getTimeOfEventFromEpoch(newEpochTime);
-      writePowerOnEventToFile(dateFile, newTimeOfEvent, isEpochNTPSynced(newEpochTime));
-      // if date changes create a new file
+      if (isEpochNTPSynced(newEpochTime)) {
+        std::string newDateString = getFilenameFromEpoch(newEpochTime);
+        // Create new file in case, date changes
+        if (lastLoopDate.compare(newDateString) != 0) {
+          dateFile.close();
+          dateFile = getLatestFileByDate(dataRoot, newDateString, newEpochTime);
+          Serial.print("picked file for writing new events: ");
+          Serial.println(dateFile.fullName());
+        }
+      }
+      writePowerOnEventToFile(dateFile, newTimeOfEvent, newEpochTime, isEpochNTPSynced(newEpochTime));
 
+      Serial.println(">>>>>> publishing unpublished events <<<<<<");
       // read last unpublished events and publish them
       // update the file with publish status
-      Serial.println("publishing unpublished events");
       publishUnpublishedEvents(dataRoot);
     }
     dateFile.close();
@@ -151,7 +160,7 @@ boolean isEpochNTPSynced(time_t epoch) {
     return (powerOnTimeInEpoch > 1651363200);
 }
 
-void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus) {
+void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus) {
     Serial.print("timeOfEvent: ");
     Serial.println(timeOfEvent.c_str());
     if (ntpStatus) {
@@ -160,11 +169,13 @@ void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, boolean
       dateFile.print("-,");
     }
     dateFile.print("PRES,");
-    dateFile.println(timeOfEvent.c_str());
+    dateFile.print(timeOfEvent.c_str());
+    dateFile.print(",");
+    dateFile.println(epoch);
     dateFile.flush();
 }
 
-void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus) {
+void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus) {
     Serial.print("timeOfEvent: ");
     Serial.println(timeOfEvent.c_str());
     if (ntpStatus) {
@@ -173,7 +184,9 @@ void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, boolean ntp
       dateFile.print("-,");
     }
     dateFile.print("PON,");
-    dateFile.println(timeOfEvent.c_str());
+    dateFile.print(timeOfEvent.c_str());
+    dateFile.print(",");
+    dateFile.println(epoch);
     dateFile.flush();
 }
 
@@ -191,28 +204,18 @@ std::string getTimeOfEventFromEpoch(time_t epochTime) {
     return timeOfEvent;
 }
 
-File getLatestFileByDate(File rootDir, std::string date) {
-  // std::vector<std::string> filenames;
-  while (File nextFile = rootDir.openNextFile()) {
-    if (!nextFile) {
-          // no more files
-          break;
-    }
-    if (date == nextFile.fullName()) {
-      Serial.print("reading existing latest file by date: ");
-      Serial.println(nextFile.fullName());
-      return nextFile;
-    }
-    nextFile.close();
+File getLatestFileByDate(File rootDir, std::string date, time_t epochTime) {
+  std::vector<std::string> filenamesSorted = listDirSorted(rootDir);
+  std::string lastFile = filenamesSorted.at(filenamesSorted.size()-1);
+  if (!isEpochNTPSynced(epochTime)) {
+    return SD.open(lastFile.c_str(), FILE_WRITE);
   }
-  std::string fullname = rootDir.fullName();
-  Serial.print("latest file by date:");
-  Serial.println((fullname + "/" + date).c_str());
-  return SD.open((fullname + "/" + date).c_str(), FILE_WRITE);
+  std::string dateFilePath = rootDir.fullName();
+  dateFilePath.append("/" + date);
+  return SD.open(dateFilePath.c_str(), FILE_WRITE);
 }
 
 void publishUnpublishedEvents(File rootDir) {
-  // read files, sort by date
   std::vector<std::string> sortedFilenames;
   Serial.println("started sorting directories");
   sortedFilenames = listDirSorted(rootDir);
@@ -223,18 +226,36 @@ void publishUnpublishedEvents(File rootDir) {
   std::string unPublishedStartDate;
   std::string unPublishedLineNum;
   std::vector<std::string> pubStatus = getPublishStatusContent();
+  // check if there is existing file status
   if (doesStatusExist(pubStatus)) {
     unPublishedStartDate = getDateFromStatus(pubStatus);
     unPublishedLineNum = getLineNumFromStatus(pubStatus);
   }
+  Serial.print("unPublishedStartDate: ");
+  Serial.print(unPublishedStartDate.c_str());
+  Serial.print(" , ");
+  Serial.print("unPublishedLineNum: ");
+  Serial.println(unPublishedLineNum.c_str());
 
-  Serial.println("processing sorted file names");
-  // pick the lowest date file
-  for (int i =0; i<sortedFilenames.size();i++) {
+  Serial.println("processing sorted file names one by one");
+  std::string prevEventName;
+  std::string prevTimeOfEvent;
+  std::string prevNtpSynced;
+  std::string prevEpoch;
+  for (int i =0; i < sortedFilenames.size();i++) {
     std::string pickedFile = sortedFilenames.at(i);
+    // if publish status exist, skip files older than that
     if (!unPublishedStartDate.empty() && !unPublishedLineNum.empty()) {
-      if (pickedFile.c_str() != unPublishedStartDate.c_str()) {
-        // TODO: Move this file to published dir /qop-published/
+      if (pickedFile.compare(unPublishedStartDate) < 0) {
+        // Move this file to published dir /qop-published/
+        Serial.print("skipping file for publishing: ");
+        Serial.println(pickedFile.c_str());
+
+        std::string actualFileName = pickedFile.substr(pickedFile.rfind("/")+1);
+        std::string newPubFilePath = "/qop-published/" + actualFileName;
+        Serial.print("moving file to qop-published directory: ");
+        Serial.println(newPubFilePath.c_str());
+        SD.rename(pickedFile.c_str(), newPubFilePath.c_str());
         continue;
       }
     }
@@ -242,15 +263,11 @@ void publishUnpublishedEvents(File rootDir) {
     Serial.println(pickedFile.c_str());
     File openedFile = SD.open(pickedFile.c_str(), FILE_READ);
     String line;
-    std::string prevEventName;
-    std::string prevTimeOfEvent;
-    std::string prevNtpSynced;
-    boolean publishError;
     int currLineNumber = 0;
     while(true) {
       line = openedFile.readStringUntil('\n');
-      Serial.print("line read: ");
-      Serial.println(line);
+      // Serial.print("line read: ");
+      // Serial.println(line);
       if (line.isEmpty()) {
         break;
       }
@@ -264,15 +281,10 @@ void publishUnpublishedEvents(File rootDir) {
       boolean ntpSynced = false;
       std::string timeOfEvent;
       std::string eventName;
-      Serial.println("string tokenisation");
+      std::string epoch;
       char *token = std::strtok((char*)line.c_str(), ",");
-      Serial.print("token");
-      Serial.println(token);
-
       int idx = 0;
-      while (token != NULL && idx <= 2) {
-        Serial.print("idx: ");
-        Serial.println(idx);
+      while (token != NULL && idx <= 3) {
         switch (idx++)
         {
         case 0:
@@ -288,48 +300,63 @@ void publishUnpublishedEvents(File rootDir) {
             timeOfEvent = token;
           }
           break;
+        case 3:
+          epoch = token;
+          break;
         default:
           break;
         }
         token = std::strtok(NULL, ",");
       }
+      Serial.println("====== event info start ======");
       Serial.print("timeOfEvent: ");
       Serial.println(timeOfEvent.c_str());
       Serial.print("eventName: ");
       Serial.println(eventName.c_str());
       Serial.print("ntpSynced: ");
       Serial.println(ntpSynced);
+      Serial.print("epoch: ");
+      Serial.println(epoch.c_str());
+      Serial.println("====== event info end ======");
       if (unPublishedLineNum.empty() || currLineNumber > std::stoi(unPublishedLineNum)) {
+        //    check for unpublished events
+        //    publish event
         if (eventName == "PRES") {
           if (prevEventName == "PON" || prevEventName == "PRES") {
             // publish power off event first
-            Serial.println("publishing power off event");
-            
+            int epochInt = std::stoi(prevEpoch);
+            int pubStatus = publishPowerOffEvent(epochInt);
+            if (pubStatus == 0) {
+              openedFile.close();
+              return;
+            }
+            Serial.println("published power off event successfully");
             persistPubStatusToFile(pickedFile, std::to_string(currLineNumber-1));
           }
-          Serial.println("publishing power resumed event");
-          persistPubStatusToFile(pickedFile, std::to_string(currLineNumber));
           // publish power resumed event
+          int epochInt = std::stoi(epoch);
+          int pubStatus = publishPowerOnEvent(epochInt);
+          if (pubStatus == 0) {
+            openedFile.close();
+            return;
+          }
+          Serial.println("published power resumed event successfully");
+          persistPubStatusToFile(pickedFile, std::to_string(currLineNumber));
         }
       }
 
       prevEventName = eventName;
       prevTimeOfEvent = timeOfEvent;
       prevNtpSynced = ntpSynced;
-        //    check for unpublished events
-        //    publish event
-    };
-    openedFile.close();
-    if (!publishError) {
-      //    mark the file as complete  
+      prevEpoch = epoch;
     }
-    // stop when all files are exhausted
+    openedFile.close();
   }
 }
 
 void persistPubStatusToFile(std::string date, std::string lineNum) {
   // Do recoverable file write
-  Serial.println("persisting pub status");
+  Serial.println("persisting publish status");
   SD.remove("qop.status");
   File pubStatusFile = SD.open("qop.status", FILE_WRITE);
   pubStatusFile.print(date.c_str());
@@ -337,7 +364,7 @@ void persistPubStatusToFile(std::string date, std::string lineNum) {
   pubStatusFile.println(lineNum.c_str());
   pubStatusFile.flush();
   pubStatusFile.close();
-  Serial.println("pub status persisted");
+  Serial.println("publish status persisted successfully");
 }
 
 std::vector<std::string> getPublishStatusContent() {
@@ -374,25 +401,29 @@ std::vector<std::string> listDirSorted(File rootDir) {
     if (!pickedFile) {
       break;
     }
-    Serial.print("file name for sort: ");
-    Serial.println(pickedFile.fullName());
     filenames.push_back(pickedFile.fullName());
+    pickedFile.close();
   }
   std::sort(filenames.begin(), filenames.end());
-  Serial.print("finished file sort of size: ");
-  Serial.println(filenames.size());
   return filenames;
 }
 
-void publishTweet(time_t epoch) {
+int publishPowerOnEvent(time_t epoch) {
+  return publishTweet("[power-on]", epoch);
+}
+int publishPowerOffEvent(time_t epoch) {
+  return publishTweet("[power-off]", epoch);
+}
+int publishTweet(std::string event, time_t epoch) {
     std::string epochCovertedTime = std::asctime(std::localtime(&epoch));
-    std::string newTweet = "[power-on][Time:" + epochCovertedTime + "]";
+    std::string newTweet = event + "[Time:" + epochCovertedTime + "]";
     std::string cleanedTweet = remove_new_lines(reduce_double_spaces(newTweet));
     Serial.println(cleanedTweet.c_str());
     
     boolean val = tcr.tweet(cleanedTweet);
     Serial.print("Tweet published status: ");
     Serial.println(val);
+    return val;
 }
 
 // Copied from: https://stackoverflow.com/a/48029948
