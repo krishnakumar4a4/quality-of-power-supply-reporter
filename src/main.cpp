@@ -42,10 +42,16 @@ time_t powerOnTimeInEpoch;
 File getLatestFileByDate(File rootDir, std::string date);
 void publishUnpublishedEvents(File rootDir);
 std::vector<std::string> listDirSorted(File rootDir);
-void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent);
-void writePowerOnEventToFile(File dateFile, std::string timeOfEvent);
+void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus);
+void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus);
 std::string getFilenameFromEpoch(time_t epochTime);
 std::string getTimeOfEventFromEpoch(time_t epochTime);
+boolean isEpochNTPSynced(time_t epoch);
+std::vector<std::string> getPublishStatusContent();
+boolean doesStatusExist(std::vector<std::string> statusVec);
+std::string getDateFromStatus(std::vector<std::string> statusVec);
+std::string getLineNumFromStatus(std::vector<std::string> statusVec);
+void persistPubStatusToFile(std::string date, std::string lineNum);
 
 void setup() {
     Serial.print("consumer key: ");
@@ -125,12 +131,12 @@ void loop() {
     }
     // wait for given time and write event to file
     std::string timeOfEvent = getTimeOfEventFromEpoch(powerOnTimeInEpoch);
-    writePowerResumeEventToFile(dateFile, timeOfEvent);
+    writePowerResumeEventToFile(dateFile, timeOfEvent, isEpochNTPSynced(powerOnTimeInEpoch));
     while (true) {
       delay(60000);
       time_t newEpochTime = tcr.getEpoch();
       std::string newTimeOfEvent = getTimeOfEventFromEpoch(newEpochTime);
-      writePowerOnEventToFile(dateFile, newTimeOfEvent);
+      writePowerOnEventToFile(dateFile, newTimeOfEvent, isEpochNTPSynced(newEpochTime));
       // if date changes create a new file
 
       // read last unpublished events and publish them
@@ -141,21 +147,33 @@ void loop() {
     dateFile.close();
 }
 
-void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent) {
+boolean isEpochNTPSynced(time_t epoch) {
+    return (powerOnTimeInEpoch > 1651363200);
+}
+
+void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus) {
     Serial.print("timeOfEvent: ");
     Serial.println(timeOfEvent.c_str());
-    dateFile.print(",");
-    dateFile.print(timeOfEvent.c_str());
-    dateFile.println(",PRES,");
+    if (ntpStatus) {
+      dateFile.print("1,");
+    } else {
+      dateFile.print("-,");
+    }
+    dateFile.print("PRES,");
+    dateFile.println(timeOfEvent.c_str());
     dateFile.flush();
 }
 
-void writePowerOnEventToFile(File dateFile, std::string timeOfEvent) {
+void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, boolean ntpStatus) {
     Serial.print("timeOfEvent: ");
     Serial.println(timeOfEvent.c_str());
-    dateFile.print(",");
-    dateFile.print(timeOfEvent.c_str());
-    dateFile.println(",PON,");
+    if (ntpStatus) {
+      dateFile.print("1,");
+    } else {
+      dateFile.print("-,");
+    }
+    dateFile.print("PON,");
+    dateFile.println(timeOfEvent.c_str());
     dateFile.flush();
 }
 
@@ -201,26 +219,152 @@ void publishUnpublishedEvents(File rootDir) {
   if (sortedFilenames.size() < 1) {
     return;
   }
+
+  std::string unPublishedStartDate;
+  std::string unPublishedLineNum;
+  std::vector<std::string> pubStatus = getPublishStatusContent();
+  if (doesStatusExist(pubStatus)) {
+    unPublishedStartDate = getDateFromStatus(pubStatus);
+    unPublishedLineNum = getLineNumFromStatus(pubStatus);
+  }
+
   Serial.println("processing sorted file names");
   // pick the lowest date file
   for (int i =0; i<sortedFilenames.size();i++) {
-    std::string baseDir = rootDir.fullName();
     std::string pickedFile = sortedFilenames.at(i);
+    if (!unPublishedStartDate.empty() && !unPublishedLineNum.empty()) {
+      if (pickedFile.c_str() != unPublishedStartDate.c_str()) {
+        // TODO: Move this file to published dir /qop-published/
+        continue;
+      }
+    }
     Serial.print("opening file for read: ");
     Serial.println(pickedFile.c_str());
     File openedFile = SD.open(pickedFile.c_str(), FILE_READ);
     String line;
-    do {
+    std::string prevEventName;
+    std::string prevTimeOfEvent;
+    std::string prevNtpSynced;
+    boolean publishError;
+    int currLineNumber = 0;
+    while(true) {
       line = openedFile.readStringUntil('\n');
       Serial.print("line read: ");
       Serial.println(line);
+      if (line.isEmpty()) {
+        break;
+      }
+      currLineNumber++;
+      if (!unPublishedLineNum.empty()) {
+        if (currLineNumber < std::stoi(unPublishedLineNum)) {
+          continue;
+        }
+      }
+
+      boolean ntpSynced = false;
+      std::string timeOfEvent;
+      std::string eventName;
+      Serial.println("string tokenisation");
+      char *token = std::strtok((char*)line.c_str(), ",");
+      Serial.print("token");
+      Serial.println(token);
+
+      int idx = 0;
+      while (token != NULL && idx <= 2) {
+        Serial.print("idx: ");
+        Serial.println(idx);
+        switch (idx++)
+        {
+        case 0:
+          if (token == "-") { // NTP synced time
+            ntpSynced = true;
+          }
+          break;
+        case 1:
+          eventName = token;
+          break;
+        case 2:
+          if (token != "") { // Event time stamp
+            timeOfEvent = token;
+          }
+          break;
+        default:
+          break;
+        }
+        token = std::strtok(NULL, ",");
+      }
+      Serial.print("timeOfEvent: ");
+      Serial.println(timeOfEvent.c_str());
+      Serial.print("eventName: ");
+      Serial.println(eventName.c_str());
+      Serial.print("ntpSynced: ");
+      Serial.println(ntpSynced);
+      if (unPublishedLineNum.empty() || currLineNumber > std::stoi(unPublishedLineNum)) {
+        if (eventName == "PRES") {
+          if (prevEventName == "PON" || prevEventName == "PRES") {
+            // publish power off event first
+            Serial.println("publishing power off event");
+            
+            persistPubStatusToFile(pickedFile, std::to_string(currLineNumber-1));
+          }
+          Serial.println("publishing power resumed event");
+          persistPubStatusToFile(pickedFile, std::to_string(currLineNumber));
+          // publish power resumed event
+        }
+      }
+
+      prevEventName = eventName;
+      prevTimeOfEvent = timeOfEvent;
+      prevNtpSynced = ntpSynced;
         //    check for unpublished events
         //    publish event
-    } while(!line.isEmpty());
-    //    mark the file as complete
-    //    move to next file and repeat
+    };
+    openedFile.close();
+    if (!publishError) {
+      //    mark the file as complete  
+    }
     // stop when all files are exhausted
   }
+}
+
+void persistPubStatusToFile(std::string date, std::string lineNum) {
+  // Do recoverable file write
+  Serial.println("persisting pub status");
+  SD.remove("qop.status");
+  File pubStatusFile = SD.open("qop.status", FILE_WRITE);
+  pubStatusFile.print(date.c_str());
+  pubStatusFile.print(",");
+  pubStatusFile.println(lineNum.c_str());
+  pubStatusFile.flush();
+  pubStatusFile.close();
+  Serial.println("pub status persisted");
+}
+
+std::vector<std::string> getPublishStatusContent() {
+  std::vector<std::string> pubStatus;
+  File pubStatusFile = SD.open("qop.status", FILE_READ); 
+  String status = pubStatusFile.readStringUntil('\n');
+  pubStatusFile.close();
+  if (status == "") {
+    return pubStatus;
+  }
+  char *token = std::strtok((char *)status.c_str(), ",");
+  pubStatus.push_back(token);
+  token = std::strtok(NULL, ",");
+  pubStatus.push_back(token);
+  return pubStatus;
+}
+
+boolean doesStatusExist(std::vector<std::string> statusVec) {
+  return statusVec.size() != 0;
+}
+
+std::string getDateFromStatus(std::vector<std::string> statusVec) {
+  return statusVec.at(0);
+}
+
+std::string getLineNumFromStatus(std::vector<std::string> statusVec) {
+  return statusVec.at(1);
 }
 
 std::vector<std::string> listDirSorted(File rootDir) {
