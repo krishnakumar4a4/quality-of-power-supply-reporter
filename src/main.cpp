@@ -17,6 +17,7 @@
 File root;
 void printDirectory(File dir, int numTabs);
 #define CS_PIN D8
+File dataRoot;
 
 // Setup start: For twitter webclient api
 #include <NTPClient.h>
@@ -37,6 +38,14 @@ std::string& remove_new_lines(std::string& s);
 
 time_t powerOnTimeInEpoch;
 // Setup End: For twitter webclient api
+
+File getLatestFileByDate(File rootDir, std::string date);
+void publishUnpublishedEvents(File rootDir);
+std::vector<std::string> listDirSorted(File rootDir);
+void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent);
+void writePowerOnEventToFile(File dateFile, std::string timeOfEvent);
+std::string getFilenameFromEpoch(time_t epochTime);
+std::string getTimeOfEventFromEpoch(time_t epochTime);
 
 void setup() {
     Serial.print("consumer key: ");
@@ -81,6 +90,13 @@ void setup() {
     }
 
     Serial.println("initialization done.");
+
+    dataRoot = SD.open("/qop");
+    if (!dataRoot) {
+      SD.mkdir("qop");
+      dataRoot = SD.open("/qop");
+    }
+
     root = SD.open("/");
     printDirectory(root, 0);
     Serial.println("done!");
@@ -90,24 +106,141 @@ void loop() {
     WiFiManager.loop();
     updater.loop();
     configManager.loop();
-    // time_t epoch = tcr.getEpoch();
-    // Serial.println(epoch);
-    if (powerOnTimeInEpoch < 1651363200) {
-        return;
-    }
+    // if (powerOnTimeInEpoch < 1651363200) {
+    //     return;
+    // }
 
-    if (publishCounter++ <= 1) {
-        Serial.println("Publishing Tweet");
-        publishTweet(powerOnTimeInEpoch);
-    }
+    // if (publishCounter++ <= 1) {
+    //     Serial.println("Publishing Tweet");
+    //     publishTweet(powerOnTimeInEpoch);
+    // }
 
-    // delay(60000);
+    std::string datedFilename = getFilenameFromEpoch(powerOnTimeInEpoch);
+
+    Serial.println("getting latest file by date");
+    File dateFile = getLatestFileByDate(dataRoot, datedFilename);
+    if (!dateFile) {
+      Serial.println("unable to open latest file for writing");
+      return;
+    }
+    // wait for given time and write event to file
+    std::string timeOfEvent = getTimeOfEventFromEpoch(powerOnTimeInEpoch);
+    writePowerResumeEventToFile(dateFile, timeOfEvent);
+    while (true) {
+      delay(60000);
+      time_t newEpochTime = tcr.getEpoch();
+      std::string newTimeOfEvent = getTimeOfEventFromEpoch(newEpochTime);
+      writePowerOnEventToFile(dateFile, newTimeOfEvent);
+      // if date changes create a new file
+
+      // read last unpublished events and publish them
+      // update the file with publish status
+      Serial.println("publishing unpublished events");
+      publishUnpublishedEvents(dataRoot);
+    }
+    dateFile.close();
+}
+
+void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent) {
+    Serial.print("timeOfEvent: ");
+    Serial.println(timeOfEvent.c_str());
+    dateFile.print(",");
+    dateFile.print(timeOfEvent.c_str());
+    dateFile.println(",PRES,");
+    dateFile.flush();
+}
+
+void writePowerOnEventToFile(File dateFile, std::string timeOfEvent) {
+    Serial.print("timeOfEvent: ");
+    Serial.println(timeOfEvent.c_str());
+    dateFile.print(",");
+    dateFile.print(timeOfEvent.c_str());
+    dateFile.println(",PON,");
+    dateFile.flush();
+}
+
+std::string getFilenameFromEpoch(time_t epochTime) {
+    tm* localTime = std::localtime(&epochTime);
+    char dateBuf[9];
+    sprintf(dateBuf, "%d%02d%02d", 1900+(localTime->tm_year), (localTime->tm_mon)+1, localTime->tm_mday);
+    return dateBuf;
+}
+
+std::string getTimeOfEventFromEpoch(time_t epochTime) {
+    tm* localTime = std::localtime(&epochTime);
+    char timeOfEvent[9];
+    sprintf(timeOfEvent, "%02d:%02d:%02d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec);
+    return timeOfEvent;
+}
+
+File getLatestFileByDate(File rootDir, std::string date) {
+  // std::vector<std::string> filenames;
+  while (File nextFile = rootDir.openNextFile()) {
+    if (!nextFile) {
+          // no more files
+          break;
+    }
+    if (date == nextFile.fullName()) {
+      Serial.print("reading existing latest file by date: ");
+      Serial.println(nextFile.fullName());
+      return nextFile;
+    }
+    nextFile.close();
+  }
+  std::string fullname = rootDir.fullName();
+  Serial.print("latest file by date:");
+  Serial.println((fullname + "/" + date).c_str());
+  return SD.open((fullname + "/" + date).c_str(), FILE_WRITE);
+}
+
+void publishUnpublishedEvents(File rootDir) {
+  // read files, sort by date
+  std::vector<std::string> sortedFilenames;
+  Serial.println("started sorting directories");
+  sortedFilenames = listDirSorted(rootDir);
+  if (sortedFilenames.size() < 1) {
+    return;
+  }
+  Serial.println("processing sorted file names");
+  // pick the lowest date file
+  for (int i =0; i<sortedFilenames.size();i++) {
+    std::string baseDir = rootDir.fullName();
+    std::string pickedFile = sortedFilenames.at(i);
+    Serial.print("opening file for read: ");
+    Serial.println(pickedFile.c_str());
+    File openedFile = SD.open(pickedFile.c_str(), FILE_READ);
+    String line;
+    do {
+      line = openedFile.readStringUntil('\n');
+      Serial.print("line read: ");
+      Serial.println(line);
+        //    check for unpublished events
+        //    publish event
+    } while(!line.isEmpty());
+    //    mark the file as complete
+    //    move to next file and repeat
+    // stop when all files are exhausted
+  }
+}
+
+std::vector<std::string> listDirSorted(File rootDir) {
+  std::vector<std::string> filenames;
+  while (true) {
+    File pickedFile = rootDir.openNextFile();
+    if (!pickedFile) {
+      break;
+    }
+    Serial.print("file name for sort: ");
+    Serial.println(pickedFile.fullName());
+    filenames.push_back(pickedFile.fullName());
+  }
+  std::sort(filenames.begin(), filenames.end());
+  Serial.print("finished file sort of size: ");
+  Serial.println(filenames.size());
+  return filenames;
 }
 
 void publishTweet(time_t epoch) {
-    // String timestamp = tcr.getTimeStamp();
-    // std::string tweet = "[power-on][Time:" + std::string(timestamp.c_str()) + "]";
-    // Serial.println(tweet.c_str());
     std::string epochCovertedTime = std::asctime(std::localtime(&epoch));
     std::string newTweet = "[power-on][Time:" + epochCovertedTime + "]";
     std::string cleanedTweet = remove_new_lines(reduce_double_spaces(newTweet));
@@ -143,7 +276,6 @@ std::string& remove_new_lines(std::string& s)
     }
     return s;
 }
-
 void printDirectory(File dir, int numTabs) {
   while (true) {
 
