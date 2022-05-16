@@ -17,6 +17,9 @@
 File root;
 void printDirectory(File dir, int numTabs);
 #define CS_PIN D8
+
+// Use this pin to manage relay enable
+#define RELAY_EN 5
 File dataRoot;
 
 // Setup start: For twitter webclient api
@@ -54,8 +57,12 @@ boolean doesStatusExist(std::vector<std::string> statusVec);
 std::string getDateFromStatus(std::vector<std::string> statusVec);
 std::string getLineNumFromStatus(std::vector<std::string> statusVec);
 void persistPubStatusToFile(std::string date, std::string lineNum);
+void run();
 
 void setup() {
+    pinMode(RELAY_EN, OUTPUT);
+    digitalWrite(RELAY_EN, HIGH);
+
     Serial.begin(115200);
     Serial.print("consumer key: ");
     Serial.println(CONSUMER_KEY);
@@ -119,6 +126,10 @@ void loop() {
     WiFiManager.loop();
     updater.loop();
     configManager.loop();
+    run();
+}
+
+void run() {
     std::string datedFilename = getFilenameFromEpoch(powerOnTimeInEpoch);
     Serial.println("getting latest file by date");
     File dateFile = getLatestFileByDate(dataRoot, datedFilename, powerOnTimeInEpoch);
