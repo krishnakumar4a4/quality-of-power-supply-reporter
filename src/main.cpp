@@ -18,8 +18,6 @@ File root;
 void printDirectory(File dir, int numTabs);
 #define CS_PIN D8
 
-// Use this pin to manage relay enable
-#define RELAY_EN 5
 File dataRoot;
 
 // Setup start: For twitter webclient api
@@ -27,21 +25,25 @@ File dataRoot;
 #include <TwitterWebAPI.h>
 #include <ctime>
 
+
+#include <Wire.h>             // Wire library (required for I2C devices)
+#include "RTClib.h"
+
 const char *ntp_server = "pool.ntp.org";
 int timezone = 5; // IST to GMT difference
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, ntp_server, (timezone*3600) + 1800, 60000);  // NTP server pool, offset (in seconds), update interval (in milliseconds)
+NTPClient timeClient(ntpUDP, ntp_server, (timezone * 3600) + 1800, 60000); // NTP server pool, offset (in seconds), update interval (in milliseconds)
 TwitterClient tcr(timeClient, CONSUMER_KEY, CONSUMER_SECRET, ACCESS_TOKEN, ACCESS_TOKEN_SECRET);
 
 int publishTweet(std::string event, time_t epoch);
 int publishPowerOnEvent(time_t epoch);
 int publishPowerOffEvent(time_t epoch);
 int publishCounter = 1;
-std::string& reduceDoubleSpaces(std::string& s);
-std::string& removeNewLines(std::string& s);
+std::string &reduceDoubleSpaces(std::string &s);
+std::string &removeNewLines(std::string &s);
 
-time_t powerOnTimeInEpoch;
+time_t ntpEpoch;
 // Setup End: For twitter webclient api
 
 File getLatestFileByDate(File rootDir, std::string date, time_t epochTime);
@@ -58,167 +60,236 @@ std::string getDateFromStatus(std::vector<std::string> statusVec);
 std::string getLineNumFromStatus(std::vector<std::string> statusVec);
 void persistPubStatusToFile(std::string date, std::string lineNum);
 void run();
+time_t getTimeFromMultipleSources();
 
-void setup() {
-    pinMode(RELAY_EN, OUTPUT);
-    digitalWrite(RELAY_EN, HIGH);
+// RTC setup
+RTC_DS1307 RTC; // Setup an instance of DS1307 naming it RTC
 
-    Serial.begin(115200);
-    Serial.print("consumer key: ");
-    Serial.println(CONSUMER_KEY);
-    Serial.print("access token: ");
-    Serial.println(ACCESS_TOKEN);
-    // LittleFS.begin();
-    GUI.begin();
-    configManager.begin();
-    WiFiManager.begin("quality-of-power-supply-reporter");
-    Serial.println("timeSync.begin()");
-    timeSync.begin();
-    Serial.println("tcr.startNTP()");
+void setup()
+{
+  Serial.begin(115200);
+  if (!RTC.begin()) {
+    Serial.println("Couldn't find RTC");
+  } else {
+    Serial.println("Connected to RTC");
+  }
 
-    tcr.startNTP();
-    powerOnTimeInEpoch = tcr.getEpoch();
+  if (!RTC.isrunning()) {
+    Serial.println("RTC is NOT running!");
+  } else {
+    Serial.println("RTC is running!");
+  }
 
-    Serial.print("Initializing SD card...");
+  Serial.print("consumer key: ");
+  Serial.println(CONSUMER_KEY);
+  Serial.print("access token: ");
+  Serial.println(ACCESS_TOKEN);
+  // LittleFS.begin();
+  GUI.begin();
+  configManager.begin();
+  WiFiManager.begin("quality-of-power-supply-reporter");
+  Serial.println("timeSync.begin()");
+  timeSync.begin();
+  Serial.println("tcr.startNTP()");
 
-    bool initFailed = false;
+  tcr.startNTP();
+  
+  // Get time for NTP/RTC
+  ntpEpoch = getTimeFromMultipleSources();
 
-    if (!SD.begin(CS_PIN, SD_SCK_MHZ(1))) {
-        initFailed = true;
-        Serial.println("initialization failed!");
-        Serial.println();
-    }
+  Serial.print("Initializing SD card...");
 
-    delay(500);
+  bool initFailed = false;
 
-    Serial.print("Card type:         ");
-    Serial.println(SD.type());
-    Serial.print("fatType:           ");
-    Serial.println(SD.fatType());
-    Serial.print("size:              ");
-    Serial.println(SD.size());
-
+  if (!SD.begin(CS_PIN, SD_SCK_MHZ(1)))
+  {
+    initFailed = true;
+    Serial.println("initialization failed!");
     Serial.println();
-    if (initFailed) {
-        delay(1000);
-        while (1); // Soft reset
-    }
+  }
 
-    Serial.println("initialization done.");
+  delay(500);
 
+  Serial.print("Card type:         ");
+  Serial.println(SD.type());
+  Serial.print("fatType:           ");
+  Serial.println(SD.fatType());
+  Serial.print("size:              ");
+  Serial.println(SD.size());
+
+  Serial.println();
+  if (initFailed)
+  {
+    delay(1000);
+    while (1)
+      ; // Soft reset
+  }
+
+  Serial.println("initialization done.");
+
+  dataRoot = SD.open("/qop");
+  if (!dataRoot)
+  {
+    SD.mkdir("qop");
     dataRoot = SD.open("/qop");
-    if (!dataRoot) {
-      SD.mkdir("qop");
-      dataRoot = SD.open("/qop");
-    }
-    File pubDataRoot = SD.open("/qop-published");
-    if (!pubDataRoot) {
-      SD.mkdir("qop-published");
-    }
-    pubDataRoot.close();
+  }
+  File pubDataRoot = SD.open("/qop-published");
+  if (!pubDataRoot)
+  {
+    SD.mkdir("qop-published");
+  }
+  pubDataRoot.close();
 
-    root = SD.open("/");
-    printDirectory(root, 0);
-    Serial.println("done!");
+  root = SD.open("/");
+  printDirectory(root, 0);
+  Serial.println("done!");
 }
 
-void loop() {
-    WiFiManager.loop();
-    updater.loop();
-    configManager.loop();
-    run();
+void loop()
+{
+  WiFiManager.loop();
+  updater.loop();
+  configManager.loop();
+  run();
 }
 
-void run() {
-    std::string datedFilename = getFilenameFromEpoch(powerOnTimeInEpoch);
-    Serial.println("getting latest file by date");
-    File dateFile = getLatestFileByDate(dataRoot, datedFilename, powerOnTimeInEpoch);
-    if (!dateFile) {
-      Serial.println("unable to open latest file for writing");
-      return;
-    }
-    Serial.print("picked file for writing new events: ");
-    Serial.println(dateFile.fullName());
-    // wait for given time and write event to file
-    std::string timeOfEvent = getTimeOfEventFromEpoch(powerOnTimeInEpoch);
-    writePowerResumeEventToFile(dateFile, timeOfEvent, powerOnTimeInEpoch, isEpochNTPSynced(powerOnTimeInEpoch));
-    std::string lastLoopDate = datedFilename;
-    while (true) {
-      delay(2 * 60000); // run every 2mins
-      time_t newEpochTime = tcr.getEpoch();
-      std::string newTimeOfEvent = getTimeOfEventFromEpoch(newEpochTime);
-      if (isEpochNTPSynced(newEpochTime)) {
-        std::string newDateString = getFilenameFromEpoch(newEpochTime);
-        // Create new file in case, date changes
-        if (lastLoopDate.compare(newDateString) != 0) {
-          dateFile.close();
-          dateFile = getLatestFileByDate(dataRoot, newDateString, newEpochTime);
-          Serial.print("picked file for writing new events: ");
-          Serial.println(dateFile.fullName());
-        }
+void run()
+{
+  std::string datedFilename = getFilenameFromEpoch(ntpEpoch);
+  Serial.println("getting latest file by date");
+  File dateFile = getLatestFileByDate(dataRoot, datedFilename, ntpEpoch);
+  if (!dateFile)
+  {
+    Serial.println("unable to open latest file for writing");
+    return;
+  }
+  Serial.print("picked file for writing new events: ");
+  Serial.println(dateFile.fullName());
+  // wait for given time and write event to file
+  std::string timeOfEvent = getTimeOfEventFromEpoch(ntpEpoch);
+  writePowerResumeEventToFile(dateFile, timeOfEvent, ntpEpoch, isEpochNTPSynced(ntpEpoch));
+  std::string lastLoopDate = datedFilename;
+  while (true)
+  {
+    delay(10 * 60000); // run every 2mins
+    time_t newEpochTime = getTimeFromMultipleSources();
+    std::string newTimeOfEvent = getTimeOfEventFromEpoch(newEpochTime);
+    if (isEpochNTPSynced(newEpochTime))
+    {
+      std::string newDateString = getFilenameFromEpoch(newEpochTime);
+      // Create new file in case, date changes
+      if (lastLoopDate.compare(newDateString) != 0)
+      {
+        dateFile.close();
+        dateFile = getLatestFileByDate(dataRoot, newDateString, newEpochTime);
+        Serial.print("picked file for writing new events: ");
+        Serial.println(dateFile.fullName());
       }
-      writePowerOnEventToFile(dateFile, newTimeOfEvent, newEpochTime, isEpochNTPSynced(newEpochTime));
-
-      Serial.println(">>>>>> publishing unpublished events <<<<<<");
-      // read last unpublished events and publish them
-      // update the file with publish status
-      publishUnpublishedEvents(dataRoot);
     }
-    dateFile.close();
+    writePowerOnEventToFile(dateFile, newTimeOfEvent, newEpochTime, isEpochNTPSynced(newEpochTime));
+
+    Serial.println(">>>>>> publishing unpublished events <<<<<<");
+    // read last unpublished events and publish them
+    // update the file with publish status
+    publishUnpublishedEvents(dataRoot);
+  }
+  dateFile.close();
 }
 
-boolean isEpochNTPSynced(time_t epoch) {
-    return (powerOnTimeInEpoch > 1651363200);
+time_t getTimeFromMultipleSources() {
+  ntpEpoch = tcr.getEpoch();
+  tm *localTime = std::localtime(&ntpEpoch);
+
+  // Making sure epoch timestamp year is greater than current year itself (dirty check)
+  if (localTime->tm_year + 1900 >= 2022)  {
+    DateTime now = RTC.now();
+    String nowTimestamp = now.timestamp();
+    Serial.print("RTC timestamp before adjustment:");
+    Serial.println(nowTimestamp);
+
+    Serial.println("adjusting RTC clock");
+    RTC.adjust(DateTime(uint16_t(localTime->tm_year+1900), uint8_t(localTime->tm_mon + 1), uint8_t(localTime->tm_mday), uint8_t(localTime->tm_hour), uint8_t(localTime->tm_min), uint8_t(localTime->tm_sec)));  // Time and date is expanded to date and time on your computer at compiletime
+  }
+  delay(10000);
+  DateTime now = RTC.now();
+  String nowTimestamp = now.timestamp();
+  Serial.print("RTC timestamp after adjustment:");
+  Serial.println(nowTimestamp);
+
+  uint32_t rtcEpoch = now.unixtime();
+  Serial.print("NTP epoch:");
+  Serial.println(ntpEpoch);
+  Serial.print("RTC epoch:");
+  Serial.println(rtcEpoch);
+  return time_t(rtcEpoch);
 }
 
-void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus) {
-    Serial.print("timeOfEvent: ");
-    Serial.println(timeOfEvent.c_str());
-    if (ntpStatus) {
-      dateFile.print("1,");
-    } else {
-      dateFile.print("-,");
-    }
-    dateFile.print("PRES,");
-    dateFile.print(timeOfEvent.c_str());
-    dateFile.print(",");
-    dateFile.println(epoch);
-    dateFile.flush();
+
+boolean isEpochNTPSynced(time_t epoch)
+{
+  return (ntpEpoch > 1651363200);
 }
 
-void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus) {
-    Serial.print("timeOfEvent: ");
-    Serial.println(timeOfEvent.c_str());
-    if (ntpStatus) {
-      dateFile.print("1,");
-    } else {
-      dateFile.print("-,");
-    }
-    dateFile.print("PON,");
-    dateFile.print(timeOfEvent.c_str());
-    dateFile.print(",");
-    dateFile.println(epoch);
-    dateFile.flush();
+void writePowerResumeEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus)
+{
+  Serial.print("timeOfEvent: ");
+  Serial.println(timeOfEvent.c_str());
+  if (ntpStatus)
+  {
+    dateFile.print("1,");
+  }
+  else
+  {
+    dateFile.print("-,");
+  }
+  dateFile.print("PRES,");
+  dateFile.print(timeOfEvent.c_str());
+  dateFile.print(",");
+  dateFile.println(epoch);
+  dateFile.flush();
 }
 
-std::string getFilenameFromEpoch(time_t epochTime) {
-    tm* localTime = std::localtime(&epochTime);
-    char dateBuf[9];
-    sprintf(dateBuf, "%d%02d%02d", 1900+(localTime->tm_year), (localTime->tm_mon)+1, localTime->tm_mday);
-    return dateBuf;
+void writePowerOnEventToFile(File dateFile, std::string timeOfEvent, time_t epoch, boolean ntpStatus)
+{
+  Serial.print("timeOfEvent: ");
+  Serial.println(timeOfEvent.c_str());
+  if (ntpStatus)
+  {
+    dateFile.print("1,");
+  }
+  else
+  {
+    dateFile.print("-,");
+  }
+  dateFile.print("PON,");
+  dateFile.print(timeOfEvent.c_str());
+  dateFile.print(",");
+  dateFile.println(epoch);
+  dateFile.flush();
 }
 
-std::string getTimeOfEventFromEpoch(time_t epochTime) {
-    tm* localTime = std::localtime(&epochTime);
-    char timeOfEvent[9];
-    sprintf(timeOfEvent, "%02d:%02d:%02d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec);
-    return timeOfEvent;
+std::string getFilenameFromEpoch(time_t epochTime)
+{
+  tm *localTime = std::localtime(&epochTime);
+  char dateBuf[9];
+  sprintf(dateBuf, "%d%02d%02d", 1900 + (localTime->tm_year), (localTime->tm_mon) + 1, localTime->tm_mday);
+  return dateBuf;
 }
 
-File getLatestFileByDate(File rootDir, std::string date, time_t epochTime) {
+std::string getTimeOfEventFromEpoch(time_t epochTime)
+{
+  tm *localTime = std::localtime(&epochTime);
+  char timeOfEvent[9];
+  sprintf(timeOfEvent, "%02d:%02d:%02d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec);
+  return timeOfEvent;
+}
+
+File getLatestFileByDate(File rootDir, std::string date, time_t epochTime)
+{
   std::vector<std::string> filenamesSorted = listDirSorted(rootDir);
-  std::string lastFile = filenamesSorted.at(filenamesSorted.size()-1);
-  if (!isEpochNTPSynced(epochTime)) {
+  std::string lastFile = filenamesSorted.at(filenamesSorted.size() - 1);
+  if (!isEpochNTPSynced(epochTime))
+  {
     return SD.open(lastFile.c_str(), FILE_WRITE);
   }
   std::string dateFilePath = rootDir.fullName();
@@ -226,11 +297,13 @@ File getLatestFileByDate(File rootDir, std::string date, time_t epochTime) {
   return SD.open(dateFilePath.c_str(), FILE_WRITE);
 }
 
-void publishUnpublishedEvents(File rootDir) {
+void publishUnpublishedEvents(File rootDir)
+{
   std::vector<std::string> sortedFilenames;
   Serial.println("started sorting directories");
   sortedFilenames = listDirSorted(rootDir);
-  if (sortedFilenames.size() < 1) {
+  if (sortedFilenames.size() < 1)
+  {
     return;
   }
 
@@ -238,7 +311,8 @@ void publishUnpublishedEvents(File rootDir) {
   std::string unPublishedLineNum;
   std::vector<std::string> pubStatus = getPublishStatusContent();
   // check if there is existing file status
-  if (doesStatusExist(pubStatus)) {
+  if (doesStatusExist(pubStatus))
+  {
     unPublishedStartDate = getDateFromStatus(pubStatus);
     unPublishedLineNum = getLineNumFromStatus(pubStatus);
   }
@@ -253,16 +327,19 @@ void publishUnpublishedEvents(File rootDir) {
   std::string prevTimeOfEvent;
   std::string prevNtpSynced;
   std::string prevEpoch;
-  for (int i =0; i < sortedFilenames.size();i++) {
+  for (int i = 0; i < sortedFilenames.size(); i++)
+  {
     std::string pickedFile = sortedFilenames.at(i);
     // if publish status exist, skip files older than that
-    if (!unPublishedStartDate.empty() && !unPublishedLineNum.empty()) {
-      if (pickedFile.compare(unPublishedStartDate) < 0) {
+    if (!unPublishedStartDate.empty() && !unPublishedLineNum.empty())
+    {
+      if (pickedFile.compare(unPublishedStartDate) < 0)
+      {
         // Move this file to published dir /qop-published/
         Serial.print("skipping file for publishing: ");
         Serial.println(pickedFile.c_str());
 
-        std::string actualFileName = pickedFile.substr(pickedFile.rfind("/")+1);
+        std::string actualFileName = pickedFile.substr(pickedFile.rfind("/") + 1);
         std::string newPubFilePath = "/qop-published/" + actualFileName;
         Serial.print("moving file to qop-published directory: ");
         Serial.println(newPubFilePath.c_str());
@@ -275,16 +352,20 @@ void publishUnpublishedEvents(File rootDir) {
     File openedFile = SD.open(pickedFile.c_str(), FILE_READ);
     String line;
     int currLineNumber = 0;
-    while(true) {
+    while (true)
+    {
       line = openedFile.readStringUntil('\n');
       // Serial.print("line read: ");
       // Serial.println(line);
-      if (line.isEmpty()) {
+      if (line.isEmpty())
+      {
         break;
       }
       currLineNumber++;
-      if (!unPublishedLineNum.empty()) {
-        if (pickedFile.compare(unPublishedStartDate) == 0 && currLineNumber < std::stoi(unPublishedLineNum)) {
+      if (!unPublishedLineNum.empty())
+      {
+        if (pickedFile.compare(unPublishedStartDate) == 0 && currLineNumber < std::stoi(unPublishedLineNum))
+        {
           continue;
         }
       }
@@ -293,13 +374,15 @@ void publishUnpublishedEvents(File rootDir) {
       std::string timeOfEvent;
       std::string eventName;
       std::string epoch;
-      char *token = std::strtok((char*)line.c_str(), ",");
+      char *token = std::strtok((char *)line.c_str(), ",");
       int idx = 0;
-      while (token != NULL && idx <= 3) {
+      while (token != NULL && idx <= 3)
+      {
         switch (idx++)
         {
         case 0:
-          if (token == "-") { // NTP synced time
+          if (token == "-")
+          { // NTP synced time
             ntpSynced = true;
           }
           break;
@@ -307,7 +390,8 @@ void publishUnpublishedEvents(File rootDir) {
           eventName = token;
           break;
         case 2:
-          if (token != "") { // Event time stamp
+          if (token != "")
+          { // Event time stamp
             timeOfEvent = token;
           }
           break;
@@ -329,25 +413,30 @@ void publishUnpublishedEvents(File rootDir) {
       Serial.print("epoch: ");
       Serial.println(epoch.c_str());
       Serial.println("====== event info end ======");
-      if (unPublishedLineNum.empty() || pickedFile.compare(unPublishedStartDate) > 0 || (pickedFile.compare(unPublishedStartDate) == 0 && currLineNumber > std::stoi(unPublishedLineNum))) {
+      if (unPublishedLineNum.empty() || pickedFile.compare(unPublishedStartDate) > 0 || (pickedFile.compare(unPublishedStartDate) == 0 && currLineNumber > std::stoi(unPublishedLineNum)))
+      {
         //    check for unpublished events
         //    publish event
-        if (eventName == "PRES") {
-          if (prevEventName == "PON" || prevEventName == "PRES") {
+        if (eventName == "PRES")
+        {
+          if (prevEventName == "PON" || prevEventName == "PRES")
+          {
             // publish power off event first
             int epochInt = std::stoi(prevEpoch);
             int pubStatus = publishPowerOffEvent(epochInt);
-            if (pubStatus == 0) {
+            if (pubStatus == 0)
+            {
               openedFile.close();
               return;
             }
             Serial.println("published power off event successfully");
-            persistPubStatusToFile(pickedFile, std::to_string(currLineNumber-1));
+            persistPubStatusToFile(pickedFile, std::to_string(currLineNumber - 1));
           }
           // publish power resumed event
           int epochInt = std::stoi(epoch);
           int pubStatus = publishPowerOnEvent(epochInt);
-          if (pubStatus == 0) {
+          if (pubStatus == 0)
+          {
             openedFile.close();
             return;
           }
@@ -365,7 +454,8 @@ void publishUnpublishedEvents(File rootDir) {
   }
 }
 
-void persistPubStatusToFile(std::string date, std::string lineNum) {
+void persistPubStatusToFile(std::string date, std::string lineNum)
+{
   // Do recoverable file write
   Serial.println("persisting publish status");
   SD.remove("qop.status");
@@ -378,12 +468,14 @@ void persistPubStatusToFile(std::string date, std::string lineNum) {
   Serial.println("publish status persisted successfully");
 }
 
-std::vector<std::string> getPublishStatusContent() {
+std::vector<std::string> getPublishStatusContent()
+{
   std::vector<std::string> pubStatus;
-  File pubStatusFile = SD.open("qop.status", FILE_READ); 
+  File pubStatusFile = SD.open("qop.status", FILE_READ);
   String status = pubStatusFile.readStringUntil('\n');
   pubStatusFile.close();
-  if (status == "") {
+  if (status == "")
+  {
     return pubStatus;
   }
   char *token = std::strtok((char *)status.c_str(), ",");
@@ -393,23 +485,29 @@ std::vector<std::string> getPublishStatusContent() {
   return pubStatus;
 }
 
-boolean doesStatusExist(std::vector<std::string> statusVec) {
+boolean doesStatusExist(std::vector<std::string> statusVec)
+{
   return statusVec.size() != 0;
 }
 
-std::string getDateFromStatus(std::vector<std::string> statusVec) {
+std::string getDateFromStatus(std::vector<std::string> statusVec)
+{
   return statusVec.at(0);
 }
 
-std::string getLineNumFromStatus(std::vector<std::string> statusVec) {
+std::string getLineNumFromStatus(std::vector<std::string> statusVec)
+{
   return statusVec.at(1);
 }
 
-std::vector<std::string> listDirSorted(File rootDir) {
+std::vector<std::string> listDirSorted(File rootDir)
+{
   std::vector<std::string> filenames;
-  while (true) {
+  while (true)
+  {
     File pickedFile = rootDir.openNextFile();
-    if (!pickedFile) {
+    if (!pickedFile)
+    {
       break;
     }
     filenames.push_back(pickedFile.fullName());
@@ -419,65 +517,77 @@ std::vector<std::string> listDirSorted(File rootDir) {
   return filenames;
 }
 
-int publishPowerOnEvent(time_t epoch) {
+int publishPowerOnEvent(time_t epoch)
+{
   return publishTweet("[power-on]", epoch);
 }
-int publishPowerOffEvent(time_t epoch) {
+int publishPowerOffEvent(time_t epoch)
+{
   return publishTweet("[power-off]", epoch);
 }
-int publishTweet(std::string event, time_t epoch) {
-    std::string epochCovertedTime = std::asctime(std::localtime(&epoch));
-    std::string newTweet = event + "[Time:" + epochCovertedTime + "]";
-    std::string cleanedTweet = removeNewLines(reduceDoubleSpaces(newTweet));
-    Serial.println(cleanedTweet.c_str());
-    
-    boolean val = tcr.tweet(cleanedTweet);
-    Serial.print("Tweet published status: ");
-    Serial.println(val);
-    return val;
+int publishTweet(std::string event, time_t epoch)
+{
+  std::string epochCovertedTime = std::asctime(std::localtime(&epoch));
+  std::string newTweet = event + "[Time:" + epochCovertedTime + "]";
+  std::string cleanedTweet = removeNewLines(reduceDoubleSpaces(newTweet));
+  Serial.println(cleanedTweet.c_str());
+
+  boolean val = tcr.tweet(cleanedTweet);
+  Serial.print("Tweet published status: ");
+  Serial.println(val);
+  return val;
 }
 
 // Copied from: https://stackoverflow.com/a/48029948
-std::string& reduceDoubleSpaces(std::string& s)
+std::string &reduceDoubleSpaces(std::string &s)
 {
-    std::string::size_type pos = s.find("  ");
-    while (pos != std::string::npos) {
-        // replace BOTH spaces with one space
-        s.replace(pos, 2, " ");
-        // start searching again, where you left off
-        // rather than going back to the beginning
-        pos = s.find("  ", pos);
-    }
-    return s;
+  std::string::size_type pos = s.find("  ");
+  while (pos != std::string::npos)
+  {
+    // replace BOTH spaces with one space
+    s.replace(pos, 2, " ");
+    // start searching again, where you left off
+    // rather than going back to the beginning
+    pos = s.find("  ", pos);
+  }
+  return s;
 }
-std::string& removeNewLines(std::string& s)
+std::string &removeNewLines(std::string &s)
 {
-    std::string::size_type pos = s.find("\n");
-    while (pos != std::string::npos) {
-        // replace BOTH spaces with one space
-        s.replace(pos, 1, "");
-        // start searching again, where you left off
-        // rather than going back to the beginning
-        pos = s.find("\n", pos);
-    }
-    return s;
+  std::string::size_type pos = s.find("\n");
+  while (pos != std::string::npos)
+  {
+    // replace BOTH spaces with one space
+    s.replace(pos, 1, "");
+    // start searching again, where you left off
+    // rather than going back to the beginning
+    pos = s.find("\n", pos);
+  }
+  return s;
 }
-void printDirectory(File dir, int numTabs) {
-  while (true) {
+void printDirectory(File dir, int numTabs)
+{
+  while (true)
+  {
 
-    File entry =  dir.openNextFile();
-    if (! entry) {
+    File entry = dir.openNextFile();
+    if (!entry)
+    {
       // no more files
       break;
     }
-    for (uint8_t i = 0; i < numTabs; i++) {
+    for (uint8_t i = 0; i < numTabs; i++)
+    {
       Serial.print('\t');
     }
     Serial.print(entry.name());
-    if (entry.isDirectory()) {
+    if (entry.isDirectory())
+    {
       Serial.println("/");
       printDirectory(entry, numTabs + 1);
-    } else {
+    }
+    else
+    {
       // files have sizes, directories do not
       Serial.print("\t\t");
       Serial.println(entry.size(), DEC);
