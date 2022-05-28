@@ -38,8 +38,8 @@ int publishTweet(std::string event, time_t epoch);
 int publishPowerOnEvent(time_t epoch);
 int publishPowerOffEvent(time_t epoch);
 int publishCounter = 1;
-std::string& reduce_double_spaces(std::string& s);
-std::string& remove_new_lines(std::string& s);
+std::string& reduceDoubleSpaces(std::string& s);
+std::string& removeNewLines(std::string& s);
 
 time_t powerOnTimeInEpoch;
 // Setup End: For twitter webclient api
@@ -144,7 +144,7 @@ void run() {
     writePowerResumeEventToFile(dateFile, timeOfEvent, powerOnTimeInEpoch, isEpochNTPSynced(powerOnTimeInEpoch));
     std::string lastLoopDate = datedFilename;
     while (true) {
-      delay(10 * 60000); // run every 10mins
+      delay(2 * 60000); // run every 2mins
       time_t newEpochTime = tcr.getEpoch();
       std::string newTimeOfEvent = getTimeOfEventFromEpoch(newEpochTime);
       if (isEpochNTPSynced(newEpochTime)) {
@@ -284,7 +284,7 @@ void publishUnpublishedEvents(File rootDir) {
       }
       currLineNumber++;
       if (!unPublishedLineNum.empty()) {
-        if (currLineNumber < std::stoi(unPublishedLineNum)) {
+        if (pickedFile.compare(unPublishedStartDate) == 0 && currLineNumber < std::stoi(unPublishedLineNum)) {
           continue;
         }
       }
@@ -329,7 +329,7 @@ void publishUnpublishedEvents(File rootDir) {
       Serial.print("epoch: ");
       Serial.println(epoch.c_str());
       Serial.println("====== event info end ======");
-      if (unPublishedLineNum.empty() || currLineNumber > std::stoi(unPublishedLineNum)) {
+      if (unPublishedLineNum.empty() || pickedFile.compare(unPublishedStartDate) > 0 || (pickedFile.compare(unPublishedStartDate) == 0 && currLineNumber > std::stoi(unPublishedLineNum))) {
         //    check for unpublished events
         //    publish event
         if (eventName == "PRES") {
@@ -428,7 +428,7 @@ int publishPowerOffEvent(time_t epoch) {
 int publishTweet(std::string event, time_t epoch) {
     std::string epochCovertedTime = std::asctime(std::localtime(&epoch));
     std::string newTweet = event + "[Time:" + epochCovertedTime + "]";
-    std::string cleanedTweet = remove_new_lines(reduce_double_spaces(newTweet));
+    std::string cleanedTweet = removeNewLines(reduceDoubleSpaces(newTweet));
     Serial.println(cleanedTweet.c_str());
     
     boolean val = tcr.tweet(cleanedTweet);
@@ -438,7 +438,7 @@ int publishTweet(std::string event, time_t epoch) {
 }
 
 // Copied from: https://stackoverflow.com/a/48029948
-std::string& reduce_double_spaces(std::string& s)
+std::string& reduceDoubleSpaces(std::string& s)
 {
     std::string::size_type pos = s.find("  ");
     while (pos != std::string::npos) {
@@ -450,7 +450,7 @@ std::string& reduce_double_spaces(std::string& s)
     }
     return s;
 }
-std::string& remove_new_lines(std::string& s)
+std::string& removeNewLines(std::string& s)
 {
     std::string::size_type pos = s.find("\n");
     while (pos != std::string::npos) {
