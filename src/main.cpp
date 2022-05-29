@@ -61,6 +61,7 @@ std::string getLineNumFromStatus(std::vector<std::string> statusVec);
 void persistPubStatusToFile(std::string date, std::string lineNum);
 void run();
 time_t getTimeFromMultipleSources();
+boolean requireRtcTimeAdjustment(tm *localTime, DateTime rtcNow);
 
 // RTC setup
 RTC_DS1307 RTC; // Setup an instance of DS1307 naming it RTC
@@ -200,28 +201,33 @@ time_t getTimeFromMultipleSources() {
   ntpEpoch = tcr.getEpoch();
   tm *localTime = std::localtime(&ntpEpoch);
 
-  // Making sure epoch timestamp year is greater than current year itself (dirty check)
-  if (localTime->tm_year + 1900 >= 2022)  {
-    DateTime now = RTC.now();
-    String nowTimestamp = now.timestamp();
-    Serial.print("RTC timestamp before adjustment:");
-    Serial.println(nowTimestamp);
-
-    Serial.println("adjusting RTC clock");
-    RTC.adjust(DateTime(uint16_t(localTime->tm_year+1900), uint8_t(localTime->tm_mon + 1), uint8_t(localTime->tm_mday), uint8_t(localTime->tm_hour), uint8_t(localTime->tm_min), uint8_t(localTime->tm_sec)));  // Time and date is expanded to date and time on your computer at compiletime
-  }
-  delay(10000);
-  DateTime now = RTC.now();
-  String nowTimestamp = now.timestamp();
-  Serial.print("RTC timestamp after adjustment:");
+  DateTime rtcNow = RTC.now();
+  String nowTimestamp = rtcNow.timestamp();
+  Serial.print("RTC timestamp before adjustment:");
   Serial.println(nowTimestamp);
 
-  uint32_t rtcEpoch = now.unixtime();
+  // Making sure epoch timestamp year is greater than current year itself (dirty check)
+  if (localTime->tm_year + 1900 >= 2022 && requireRtcTimeAdjustment(localTime, rtcNow))  {
+    Serial.println("adjusting RTC clock");
+    RTC.adjust(DateTime(uint16_t(localTime->tm_year+1900), uint8_t(localTime->tm_mon + 1), uint8_t(localTime->tm_mday), uint8_t(localTime->tm_hour), uint8_t(localTime->tm_min), uint8_t(localTime->tm_sec)));  // Time and date is expanded to date and time on your computer at compiletime
+    rtcNow = RTC.now();
+    String nowTimestamp = rtcNow.timestamp();
+    Serial.print("RTC timestamp after adjustment:");
+    Serial.println(nowTimestamp);
+    return ntpEpoch;
+  }
+
+  uint32_t rtcEpoch = rtcNow.unixtime();
   Serial.print("NTP epoch:");
   Serial.println(ntpEpoch);
   Serial.print("RTC epoch:");
   Serial.println(rtcEpoch);
   return time_t(rtcEpoch);
+}
+
+boolean requireRtcTimeAdjustment(tm *localTime, DateTime rtcNow) {
+  return localTime->tm_year+1900 != rtcNow.year() || localTime->tm_mon + 1 != rtcNow.month() || localTime->tm_mday != rtcNow.day() ||
+  localTime->tm_hour != rtcNow.hour() || (localTime->tm_min - rtcNow.minute()) > 10;
 }
 
 
