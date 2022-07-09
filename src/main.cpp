@@ -17,6 +17,8 @@
 File root;
 void printDirectory(File dir, int numTabs);
 #define CS_PIN D8
+#define RELAY_EN D3
+#define MAINS_SENSE_PIN D4
 
 File dataRoot;
 
@@ -77,12 +79,19 @@ int lastSensorReading = 0;
 int lastMainPowerStatus = -1;
 
 int mainPowerStatus();
+int digitalMainPowerStatus();
 void updatePowerStatusIfChanged();
 void shutdown();
+
+IRAM_ATTR void senseFallingState();
+
+boolean shouldInformNano = true;
 
 void setup()
 {
   Serial.begin(115200);
+  pinMode(RELAY_EN, OUTPUT);
+  pinMode(MAINS_SENSE_PIN, INPUT);
   if (!RTC.begin()) {
     Serial.println("Couldn't find RTC");
   } else {
@@ -159,7 +168,11 @@ void setup()
   Serial.println("done!");
 
   // attachInterrupt(digitalPinToInterrupt(MAINS_POWER_SENSE_PIN), senseRisingState, CHANGE);
-  // attachInterrupt(digitalPinToInterrupt(MAINS_POWER_SENSE_PIN), senseFallingState, FALLING);
+  // attachInterrupt(digitalPinToInterrupt(RELAY_EN), senseFallingState, CHANGE);
+}
+
+IRAM_ATTR void senseFallingState() {
+  Serial.println("!!!!!!!!!!!!!!!!!!!!!!!!!MOTION DETECTED!!!!!!!!!!!!!!!!!!!!!!!!");
 }
 
 void loop()
@@ -176,7 +189,15 @@ void loop()
   }
 }
 
+int digitalMainPowerStatus() {
+  int currentSensorValue = digitalRead(MAINS_SENSE_PIN);
+  Serial.print("main power status on D4: ");
+  Serial.println(currentSensorValue);
+  return currentSensorValue;
+}
+
 int mainPowerStatus() {
+  // return digitalMainPowerStatus();
   int currentSensorValue = analogRead(MAINS_ANALOG_SENSE_PIN);
   int diff = currentSensorValue - lastSensorReading;
   Serial.print("lastSensorReading: ");
@@ -203,6 +224,26 @@ int mainPowerStatus() {
 
 void updatePowerStatusIfChanged() {
   Serial.println("Updating power status if changed");
+  if (shouldInformNano) {
+    Serial.println("Informing nano");
+    digitalWrite(RELAY_EN, HIGH);
+    delay(2000);
+    digitalWrite(RELAY_EN, LOW);
+    delay(2000);
+    digitalWrite(RELAY_EN, HIGH);
+    delay(2000);
+    digitalWrite(RELAY_EN, LOW);
+    delay(2000);
+    digitalWrite(RELAY_EN, HIGH);
+    delay(2000);
+    digitalWrite(RELAY_EN, LOW);
+    delay(2000);
+    digitalWrite(RELAY_EN, HIGH);
+    delay(2000);
+    digitalWrite(RELAY_EN, LOW);
+    delay(2000);
+    shouldInformNano = false;
+  }
   time_t currentEpochTime = getTimeFromMultipleSources();
   Serial.print("Current epoch time: ");
   Serial.println(currentEpochTime);
@@ -237,6 +278,7 @@ void updatePowerStatusIfChanged() {
       writePowerResumeEventToFile(currentDayFile, timeOfEventString, currentEpochTime, isEpochNTPSynced(currentEpochTime));
     } else if (currentMainPowerStatus == 0) {
       writePowerOffEventToFile(currentDayFile, timeOfEventString, currentEpochTime, isEpochNTPSynced(currentEpochTime));
+      currentDayFile.close();
       shutdown();
     }
     lastMainPowerStatus = currentMainPowerStatus;
@@ -245,30 +287,36 @@ void updatePowerStatusIfChanged() {
 
 void shutdown() {
     Serial.println("putting in deepsleep");
-    currentDayFile.close();
     SD.end();
+    shouldInformNano = true;
+    while(true) {};
+    // currentDayFile.close();
+    // SD.end();
     // ESP.wdtDisable();
-    int threshold = millis();
-    int startValue = threshold;
-    while (true) {
-      if (millis() > threshold) {
-        delay(100);
-        threshold = threshold + 1000;
-        if (mainPowerStatus() == 1) {
-          break;
-        }
-      } else {
-        yield();
-        delay(100);
-      }
-      if ((millis() - startValue) > 30 * 1000) {
-        yield();
-        break;
-      }
-    }
+    // int threshold = millis();
+    // int startValue = threshold;
+    // while (true) {
+    //   if (millis() > threshold) {
+    //     delay(100);
+    //     threshold = threshold + 1000;
+    //     if (mainPowerStatus() == 1) {
+    //       break;
+    //     }
+    //   } else {
+    //     yield();
+    //     delay(100);
+    //   }
+    //   if ((millis() - startValue) > 30 * 1000) {
+    //     yield();
+    //     break;
+    //   }
+    // }
     // ESP.restart();
     // delay(30000);
     // ESP.deepSleep(0);
+    // while (mainPowerStatus() != 1) {
+    //   ESP.deepSleep(10000);
+    // }
 }
 
 // void run()
