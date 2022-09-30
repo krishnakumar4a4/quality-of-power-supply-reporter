@@ -90,8 +90,6 @@ boolean shouldInformNano = true;
 void setup()
 {
   Serial.begin(115200);
-  pinMode(RELAY_EN, OUTPUT);
-  pinMode(MAINS_SENSE_PIN, INPUT);
   if (!RTC.begin()) {
     Serial.println("Couldn't find RTC");
   } else {
@@ -112,10 +110,7 @@ void setup()
   GUI.begin();
   configManager.begin();
   WiFiManager.begin("quality-of-power-supply-reporter");
-  Serial.println("timeSync.begin()");
   timeSync.begin();
-  Serial.println("tcr.startNTP()");
-
   tcr.startNTP();
   
   // Get time for NTP/RTC
@@ -166,13 +161,6 @@ void setup()
   root = SD.open("/");
   printDirectory(root, 0);
   Serial.println("done!");
-
-  // attachInterrupt(digitalPinToInterrupt(MAINS_POWER_SENSE_PIN), senseRisingState, CHANGE);
-  // attachInterrupt(digitalPinToInterrupt(RELAY_EN), senseFallingState, CHANGE);
-}
-
-IRAM_ATTR void senseFallingState() {
-  Serial.println("!!!!!!!!!!!!!!!!!!!!!!!!!MOTION DETECTED!!!!!!!!!!!!!!!!!!!!!!!!");
 }
 
 void loop()
@@ -187,13 +175,6 @@ void loop()
     i = i + 1000;
     publishUnpublishedEvents(dataRoot);
   }
-}
-
-int digitalMainPowerStatus() {
-  int currentSensorValue = digitalRead(MAINS_SENSE_PIN);
-  Serial.print("main power status on D4: ");
-  Serial.println(currentSensorValue);
-  return currentSensorValue;
 }
 
 int mainPowerStatus() {
@@ -224,26 +205,6 @@ int mainPowerStatus() {
 
 void updatePowerStatusIfChanged() {
   Serial.println("Updating power status if changed");
-  if (shouldInformNano) {
-    Serial.println("Informing nano");
-    digitalWrite(RELAY_EN, HIGH);
-    delay(2000);
-    digitalWrite(RELAY_EN, LOW);
-    delay(2000);
-    digitalWrite(RELAY_EN, HIGH);
-    delay(2000);
-    digitalWrite(RELAY_EN, LOW);
-    delay(2000);
-    digitalWrite(RELAY_EN, HIGH);
-    delay(2000);
-    digitalWrite(RELAY_EN, LOW);
-    delay(2000);
-    digitalWrite(RELAY_EN, HIGH);
-    delay(2000);
-    digitalWrite(RELAY_EN, LOW);
-    delay(2000);
-    shouldInformNano = false;
-  }
   time_t currentEpochTime = getTimeFromMultipleSources();
   Serial.print("Current epoch time: ");
   Serial.println(currentEpochTime);
@@ -278,88 +239,10 @@ void updatePowerStatusIfChanged() {
       writePowerResumeEventToFile(currentDayFile, timeOfEventString, currentEpochTime, isEpochNTPSynced(currentEpochTime));
     } else if (currentMainPowerStatus == 0) {
       writePowerOffEventToFile(currentDayFile, timeOfEventString, currentEpochTime, isEpochNTPSynced(currentEpochTime));
-      currentDayFile.close();
-      shutdown();
     }
     lastMainPowerStatus = currentMainPowerStatus;
   }
 }
-
-void shutdown() {
-    Serial.println("putting in deepsleep");
-    SD.end();
-    shouldInformNano = true;
-    while(true) {};
-    // currentDayFile.close();
-    // SD.end();
-    // ESP.wdtDisable();
-    // int threshold = millis();
-    // int startValue = threshold;
-    // while (true) {
-    //   if (millis() > threshold) {
-    //     delay(100);
-    //     threshold = threshold + 1000;
-    //     if (mainPowerStatus() == 1) {
-    //       break;
-    //     }
-    //   } else {
-    //     yield();
-    //     delay(100);
-    //   }
-    //   if ((millis() - startValue) > 30 * 1000) {
-    //     yield();
-    //     break;
-    //   }
-    // }
-    // ESP.restart();
-    // delay(30000);
-    // ESP.deepSleep(0);
-    // while (mainPowerStatus() != 1) {
-    //   ESP.deepSleep(10000);
-    // }
-}
-
-// void run()
-// {
-//   std::string datedFilename = getFilenameFromEpoch(ntpEpoch);
-//   Serial.println("getting latest file by date");
-//   File dateFile = getLatestFileByDate(dataRoot, datedFilename, ntpEpoch);
-//   if (!dateFile)
-//   {
-//     Serial.println("unable to open latest file for writing");
-//     return;
-//   }
-//   Serial.print("picked file for writing new events: ");
-//   Serial.println(dateFile.fullName());
-//   // wait for given time and write event to file
-//   std::string timeOfEvent = getTimeOfEventFromEpoch(ntpEpoch);
-//   writePowerResumeEventToFile(dateFile, timeOfEvent, ntpEpoch, isEpochNTPSynced(ntpEpoch));
-//   std::string lastLoopDate = datedFilename;
-//   while (true)
-//   {
-//     delay(10 * 60000); // run every 2mins
-//     time_t newEpochTime = getTimeFromMultipleSources();
-//     std::string newTimeOfEvent = getTimeOfEventFromEpoch(newEpochTime);
-//     if (isEpochNTPSynced(newEpochTime))
-//     {
-//       std::string newDateString = getFilenameFromEpoch(newEpochTime);
-//       // Create new file in case, date changes
-//       if (lastLoopDate.compare(newDateString) != 0)
-//       {
-//         dateFile.close();
-//         dateFile = getLatestFileByDate(dataRoot, newDateString, newEpochTime);
-//         Serial.print("picked file for writing new events: ");
-//         Serial.println(dateFile.fullName());
-//       }
-//     }
-//     writePowerOnEventToFile(dateFile, newTimeOfEvent, newEpochTime, isEpochNTPSynced(newEpochTime));
-//     Serial.println(">>>>>> publishing unpublished events <<<<<<");
-//     // read last unpublished events and publish them
-//     // update the file with publish status
-//     publishUnpublishedEvents(dataRoot);
-//   }
-//   dateFile.close();
-// }
 
 time_t getTimeFromMultipleSources() {
   ntpEpoch = tcr.getEpoch();
