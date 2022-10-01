@@ -262,7 +262,7 @@ time_t getTimeFromMultipleSources() {
 
 boolean requireRtcTimeAdjustment(tm *localTime, DateTime rtcNow) {
   return localTime->tm_year+1900 != rtcNow.year() || localTime->tm_mon + 1 != rtcNow.month() || localTime->tm_mday != rtcNow.day() ||
-  localTime->tm_hour != rtcNow.hour() || (localTime->tm_min - rtcNow.minute()) > 10;
+  localTime->tm_hour != rtcNow.hour() || (localTime->tm_min - rtcNow.minute()) > 2;
 }
 
 boolean isEpochNTPSynced(time_t epoch)
@@ -590,7 +590,7 @@ int publishPowerOffEvent(time_t epoch)
 int publishTweet(std::string event, time_t epoch)
 {
   std::string epochCovertedTime = std::asctime(std::localtime(&epoch));
-  std::string newTweet = event + "[Time:" + epochCovertedTime + "]";
+  std::string newTweet = event + " [Time:" + epochCovertedTime + "]" + " [monotonic: " + std::to_string(millis()) + "]";
   std::string cleanedTweet = removeNewLines(reduceDoubleSpaces(newTweet));
   Serial.println(cleanedTweet.c_str());
 
