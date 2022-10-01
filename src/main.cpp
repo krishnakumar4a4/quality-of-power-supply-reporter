@@ -13,15 +13,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include <SdFat.h>
-
-File root;
-void printDirectory(File dir, int numTabs);
 #define CS_PIN D8
-#define RELAY_EN D3
-#define MAINS_SENSE_PIN D4
-
-File dataRoot;
-
 // Setup start: For twitter webclient api
 #include <NTPClient.h>
 #include <TwitterWebAPI.h>
@@ -41,13 +33,15 @@ TwitterClient tcr(timeClient, CONSUMER_KEY, CONSUMER_SECRET, ACCESS_TOKEN, ACCES
 int publishTweet(std::string event, time_t epoch);
 int publishPowerOnEvent(time_t epoch);
 int publishPowerOffEvent(time_t epoch);
-int publishCounter = 1;
 std::string &reduceDoubleSpaces(std::string &s);
 std::string &removeNewLines(std::string &s);
 
 time_t ntpEpoch;
 // Setup End: For twitter webclient api
 
+File root;
+File dataRoot;
+void printDirectory(File dir, int numTabs);
 File getLatestFileByDate(File rootDir, std::string date, time_t epochTime);
 void publishUnpublishedEvents(File rootDir);
 std::vector<std::string> listDirSorted(File rootDir);
@@ -69,23 +63,21 @@ boolean requireRtcTimeAdjustment(tm *localTime, DateTime rtcNow);
 // RTC setup
 RTC_DS1307 RTC; // Setup an instance of DS1307 naming it RTC
 
-int i;
 #define MAINS_ANALOG_SENSE_PIN A0
 
 File currentDayFile;
 std::string currentDateString;
 bool mainsPoweredOffAtleastOnce = false;
-int lastSensorReading = 0;
+int lastSensorReading;
 int lastMainPowerStatus = -1;
 
 int mainPowerStatus();
-int digitalMainPowerStatus();
 void updatePowerStatusIfChanged();
-void shutdown();
 
 IRAM_ATTR void senseFallingState();
 
 boolean shouldInformNano = true;
+unsigned long i;
 
 void setup()
 {
@@ -169,17 +161,22 @@ void loop()
   updater.loop();
   configManager.loop();
   // run();
-  if (millis() >= i) {
+  unsigned long currentMillis = millis();
+  if (currentMillis >= i) {
     Serial.print("Loop start: ");
     Serial.println(i);
-    i = i + 1000;
+    i = currentMillis + 5000;
     publishUnpublishedEvents(dataRoot);
   }
 }
 
+// mainPowerStatus: Returns 0 if power off for the first time, 
+// post that returns 1 on power On and 0 on Powerr Off, otherwise returns -1
 int mainPowerStatus() {
-  // return digitalMainPowerStatus();
   int currentSensorValue = analogRead(MAINS_ANALOG_SENSE_PIN);
+  if (lastSensorReading == NULL) {
+    lastSensorReading = currentSensorValue;
+  }
   int diff = currentSensorValue - lastSensorReading;
   Serial.print("lastSensorReading: ");
   Serial.println(lastSensorReading);
@@ -188,17 +185,11 @@ int mainPowerStatus() {
   Serial.print("diff: ");
   Serial.println(diff);
   lastSensorReading = currentSensorValue;
-  if (mainsPoweredOffAtleastOnce) {
-    if (diff >= 100) {
-      return 1;
-    } else if (diff < -100) {
-      return 0;
-    }
-  } else {
-    if (diff <= -100) {
-      mainsPoweredOffAtleastOnce = true;
-      return 0;
-    }
+  // diff +ve is raising edge and -ve is falling edge
+  if (diff >= 100) {
+    return 1;
+  } else if (diff <= -100) {
+    return 0;
   }
   return -1;
 }
@@ -208,26 +199,23 @@ void updatePowerStatusIfChanged() {
   time_t currentEpochTime = getTimeFromMultipleSources();
   Serial.print("Current epoch time: ");
   Serial.println(currentEpochTime);
-  if (currentDayFile == NULL) {
-    currentDateString = getFilenameFromEpoch(currentEpochTime);
-    currentDayFile = getLatestFileByDate(dataRoot, currentDateString, currentEpochTime);
-    std::string timeOfEventString = getTimeOfEventFromEpoch(currentEpochTime);
-    writePowerResumeEventToFile(currentDayFile, timeOfEventString, currentEpochTime, isEpochNTPSynced(currentEpochTime));
-  } else {
-    if (isEpochNTPSynced(currentEpochTime))
+
+  if (isEpochNTPSynced(currentEpochTime))
     {
       std::string newDateString = getFilenameFromEpoch(currentEpochTime);
       // Create new file in case, date changes
       if (currentDateString.compare(newDateString) != 0)
       {
-        currentDayFile.close();
+        if (currentDayFile != NULL) {
+          currentDayFile.close();
+        }
+        
         currentDayFile = getLatestFileByDate(dataRoot, newDateString, currentEpochTime);
         currentDateString = newDateString;
         Serial.print("picked file for writing new events: ");
         Serial.println(currentDayFile.fullName());
       }
     }
-  }
 
   int currentMainPowerStatus = mainPowerStatus();
   Serial.print("mainPowerStatus: ");
@@ -276,7 +264,6 @@ boolean requireRtcTimeAdjustment(tm *localTime, DateTime rtcNow) {
   return localTime->tm_year+1900 != rtcNow.year() || localTime->tm_mon + 1 != rtcNow.month() || localTime->tm_mday != rtcNow.day() ||
   localTime->tm_hour != rtcNow.hour() || (localTime->tm_min - rtcNow.minute()) > 10;
 }
-
 
 boolean isEpochNTPSynced(time_t epoch)
 {
@@ -406,10 +393,6 @@ void publishUnpublishedEvents(File rootDir)
   // check and update power status change - end
 
   Serial.println("processing sorted file names one by one");
-  std::string prevEventName;
-  std::string prevTimeOfEvent;
-  std::string prevNtpSynced;
-  std::string prevEpoch;
   for (int i = 0; i < sortedFilenames.size(); i++)
   {
     // check and update power status change - start
@@ -506,40 +489,28 @@ void publishUnpublishedEvents(File rootDir)
       Serial.println("====== event info end ======");
       if (unPublishedLineNum.empty() || pickedFile.compare(unPublishedStartDate) > 0 || (pickedFile.compare(unPublishedStartDate) == 0 && currLineNumber > std::stoi(unPublishedLineNum)))
       {
-        //    check for unpublished events
-        //    publish event
-        if (prevEventName == "POFF")
-          {
-            // publish power off event first
-            int epochInt = std::stoi(prevEpoch);
-            int pubStatus = publishPowerOffEvent(epochInt);
-            if (pubStatus == 0)
-            {
-              openedFile.close();
-              return;
-            }
-            Serial.println("published power off event successfully");
-            persistPubStatusToFile(pickedFile, std::to_string(currLineNumber - 1));
-        }
-        if (eventName == "PRES")
-        {
-          // publish power resumed event
+          // publish events
           int epochInt = std::stoi(epoch);
-          int pubStatus = publishPowerOnEvent(epochInt);
+          int pubStatus = 0;
+          if (eventName == "POFF") {
+            pubStatus = publishPowerOffEvent(epochInt);
+          } else if (eventName == "PRES") {
+            pubStatus = publishPowerOnEvent(epochInt);
+          }
+          
           if (pubStatus == 0)
           {
             openedFile.close();
             return;
           }
-          Serial.println("published power resumed event successfully");
-          persistPubStatusToFile(pickedFile, std::to_string(currLineNumber));
-        }
-      }
 
-      prevEventName = eventName;
-      prevTimeOfEvent = timeOfEvent;
-      prevNtpSynced = ntpSynced;
-      prevEpoch = epoch;
+          std::string log = "";
+          log.append("published ");
+          log.append(eventName);
+          log.append(" event successfully");
+          Serial.println(log.c_str());
+          persistPubStatusToFile(pickedFile, std::to_string(currLineNumber));
+      }
     }
     openedFile.close();
   }
