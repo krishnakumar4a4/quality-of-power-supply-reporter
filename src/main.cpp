@@ -23,12 +23,6 @@
 #include <Wire.h>             // Wire library (required for I2C devices)
 #include "RTClib.h"
 
-// Webserial library for web browser based serial monitor
-#include <WebSerial.h>
-#include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-AsyncWebServer server(80);
-
 const char *ntp_server = "pool.ntp.org";
 int timezone = 5; // IST to GMT difference
 
@@ -88,21 +82,16 @@ unsigned long i;
 void setup()
 {
   Serial.begin(115200);
-  WebSerial.begin(&server);
   if (!RTC.begin()) {
     Serial.println("ERR: Couldn't find RTC");
-    WebSerial.println("ERR: Couldn't find RTC");
   } else {
     Serial.println("INFO: RTC Connected");
-    WebSerial.println("INFO: RTC Connected");
   }
 
   if (!RTC.isrunning()) {
     Serial.println("ERR: RTC is NOT running!");
-    WebSerial.println("ERR: RTC is NOT running!");
   } else {
     Serial.println("INFO: RTC is running!");
-    WebSerial.println("INFO: RTC is running!");
   }
 
   Serial.print("DEBUG: twitter account consumer key: ");
@@ -176,9 +165,7 @@ void loop()
   unsigned long currentMillis = millis();
   if (currentMillis >= i) {
     Serial.print("DEBUG: Run Loop started after ms: ");
-    Serial.println(i);    
-    WebSerial.print("DEBUG: Run Loop started after ms: ");
-    WebSerial.println(std::to_string(i).c_str());
+    Serial.println(i);
     i = currentMillis + 5000;
     publishUnpublishedEvents(dataRoot);
   }
