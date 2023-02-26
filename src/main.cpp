@@ -413,6 +413,11 @@ void publishUnpublishedEvents(File rootDir)
 
         std::string actualFileName = pickedFile.substr(pickedFile.rfind("/") + 1);
         std::string newPubFilePath = "/qop-published/" + actualFileName;
+        boolean isRemoved = SD.remove(newPubFilePath.c_str());
+        Serial.print("DEBUG: Deleting file on /qop-published directory before moving: ");
+        Serial.print(newPubFilePath.c_str());
+        Serial.print(", isRemoved: ");
+        Serial.println(isRemoved);
         boolean isSuccess = SD.rename(pickedFile.c_str(), newPubFilePath.c_str());
         Serial.print("DEBUG: Moved published file to /qop-published directory: ");
         Serial.print(newPubFilePath.c_str());
@@ -527,9 +532,10 @@ void publishUnpublishedEvents(File rootDir)
 
 void persistPubStatusToFile(std::string date, std::string lineNum)
 {
-  // Do recoverable file write
+  // TODO: Recoverable file write impl
   Serial.println("DEBUG: Persisting publish status to /qop.status file");
-  SD.remove("qop.status");
+  SD.remove("qop.status.old");
+  SD.rename("qop.status", "qop.status.old");
   File pubStatusFile = SD.open("qop.status", FILE_WRITE);
   pubStatusFile.print(date.c_str());
   pubStatusFile.print(",");
@@ -541,6 +547,7 @@ void persistPubStatusToFile(std::string date, std::string lineNum)
 
 std::vector<std::string> getPublishStatusContent()
 {
+  // TODO: Recoverable file read impl
   std::vector<std::string> pubStatus;
   File pubStatusFile = SD.open("qop.status", FILE_READ);
   String status = pubStatusFile.readStringUntil('\n');
