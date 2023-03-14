@@ -235,6 +235,14 @@ void updatePowerStatusIfChanged() {
 time_t getTimeFromMultipleSources() {
   ntpEpoch = tcr.getEpoch();
   tm *localTime = std::localtime(&ntpEpoch);
+  Serial.print("DEBUG: NTP date before adjustment -> ");
+  Serial.print("NTP year: ");
+  Serial.print(localTime->tm_year);
+  Serial.print(", NTP month: ");
+  Serial.print(localTime->tm_mon);
+  Serial.print(", NTP date: ");
+  Serial.println(localTime->tm_mday);
+
 
   DateTime rtcNow = RTC.now();
   String nowTimestamp = rtcNow.timestamp();
@@ -246,9 +254,9 @@ time_t getTimeFromMultipleSources() {
     Serial.println("DEBUG: RTC clock needed adjustment");
     RTC.adjust(DateTime(uint16_t(localTime->tm_year+1900), uint8_t(localTime->tm_mon + 1), uint8_t(localTime->tm_mday), uint8_t(localTime->tm_hour), uint8_t(localTime->tm_min), uint8_t(localTime->tm_sec)));  // Time and date is expanded to date and time on your computer at compiletime
     rtcNow = RTC.now();
-    String nowTimestamp = rtcNow.timestamp();
+    String adjustedRtcNowTimestamp = rtcNow.timestamp();
     Serial.print("DEBUG: RTC clock timestamp adjusted to:");
-    Serial.println(nowTimestamp);
+    Serial.println(adjustedRtcNowTimestamp);
     return ntpEpoch;
   }
 
@@ -266,8 +274,47 @@ boolean requireRtcTimeAdjustment(tm *localTime, DateTime rtcNow) {
   if (localTime->tm_year+1900 == 2036 && localTime->tm_mon + 1 == 2 && localTime->tm_mday == 7) {
     return false;
   }
-  return localTime->tm_year+1900 != rtcNow.year() || localTime->tm_mon + 1 != rtcNow.month() || localTime->tm_mday != rtcNow.day() ||
-  localTime->tm_hour != rtcNow.hour() || (localTime->tm_min - rtcNow.minute()) > 2;
+  if (localTime->tm_year+1900 != rtcNow.year()) {
+    Serial.print("DEBUG: NTP year not equal to RTC year: ");
+    Serial.print("NTP year: ");
+    Serial.print(localTime->tm_year+1900);
+    Serial.print("RTC year: ");
+    Serial.print(rtcNow.year());
+    return true;
+  }
+  if (localTime->tm_mon + 1 != rtcNow.month()) {
+    Serial.print("DEBUG: NTP month not equal to RTC month: ");
+    Serial.print("NTP month: ");
+    Serial.print(localTime->tm_mon+1);
+    Serial.print("RTC month: ");
+    Serial.print(rtcNow.month());
+    return true;
+  }
+  if (localTime->tm_mday != rtcNow.day()) {
+    Serial.print("DEBUG: NTP day not equal to RTC day: ");
+    Serial.print("NTP day: ");
+    Serial.print(localTime->tm_mday);
+    Serial.print("RTC day: ");
+    Serial.print(rtcNow.day());
+    return true;
+  }
+  if (localTime->tm_mday != rtcNow.day()) {
+    Serial.print("DEBUG: NTP hour not equal to RTC Hour: ");
+    Serial.print("NTP Hour: ");
+    Serial.print(localTime->tm_hour);
+    Serial.print("RTC Hour: ");
+    Serial.print(rtcNow.hour());
+    return true;
+  }
+  if ((localTime->tm_min - rtcNow.minute()) > 2) {
+    Serial.print("DEBUG: NTP and RTC differ by more than 2mins: ");
+    Serial.print("NTP Min: ");
+    Serial.print(localTime->tm_min);
+    Serial.print("RTC Min: ");
+    Serial.print(rtcNow.minute());
+    return true;
+  }
+  return false;
 }
 
 boolean isEpochNTPSynced(time_t epoch)
