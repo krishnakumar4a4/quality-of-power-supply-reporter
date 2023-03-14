@@ -261,6 +261,11 @@ time_t getTimeFromMultipleSources() {
 }
 
 boolean requireRtcTimeAdjustment(tm *localTime, DateTime rtcNow) {
+  // According to this https://en.wikipedia.org/wiki/Time_Protocol
+  // 07-02-2036 date can be ignored if it is coming from NTP source
+  if (localTime->tm_year+1900 == 2036 && localTime->tm_mon + 1 == 2 && localTime->tm_mday == 7) {
+    return false;
+  }
   return localTime->tm_year+1900 != rtcNow.year() || localTime->tm_mon + 1 != rtcNow.month() || localTime->tm_mday != rtcNow.day() ||
   localTime->tm_hour != rtcNow.hour() || (localTime->tm_min - rtcNow.minute()) > 2;
 }
