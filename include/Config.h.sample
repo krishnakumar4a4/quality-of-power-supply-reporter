@@ -1,0 +1,9 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define CONSUMER_KEY "<Twitter V2 API Key>"
+#define CONSUMER_SECRET "<Twitter V2 API Key Secret>"
+#define ACCESS_TOKEN "<Twitter V2 Access Token>"
+#define ACCESS_TOKEN_SECRET "<Twitter V2 Accesss Token Secret>"
+
+#endif
