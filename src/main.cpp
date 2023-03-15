@@ -39,6 +39,19 @@ std::string &removeNewLines(std::string &s);
 time_t ntpEpoch;
 // Setup End: For twitter webclient api
 
+// Setup Start: UDP broadcast
+#include "WiFiUdp.h"
+WiFiUDP udp;
+
+// UDP connection configuration
+#define SOURCE_UDP_PORT 52792 // UDP port to receive from
+#define DESTINATION_UDP_PORT 52791 // UDP Port to send to
+ 
+#define DENSTINATION_IP_ADDRESS 255,255,255,255 
+IPAddress destinationIp(DENSTINATION_IP_ADDRESS);
+void printToUDPBroadacast();
+// Setup End: UDP broadcast
+
 File root;
 File dataRoot;
 void printDirectory(File dir, int numTabs);
@@ -108,6 +121,9 @@ void setup()
   // Get time for NTP/RTC
   ntpEpoch = getTimeFromMultipleSources();
 
+  // Start WiFi UDP communication library
+  udp.begin(SOURCE_UDP_PORT);
+
   Serial.println("INFO: Initializing SD card...");
 
   bool initFailed = false;
@@ -165,10 +181,18 @@ void loop()
   unsigned long currentMillis = millis();
   if (currentMillis >= i) {
     Serial.print("DEBUG: Run Loop started after ms: ");
+    printToUDPBroadacast();
     Serial.println(i);
     i = currentMillis + 5000;
     publishUnpublishedEvents(dataRoot);
   }
+}
+
+void printToUDPBroadacast() {
+  // Start assembling UDP packet
+  udp.beginPacket(destinationIp, DESTINATION_UDP_PORT);
+  udp.write("This one is sample UDP broadcast data for testing");
+  udp.endPacket();
 }
 
 // mainPowerStatus: Returns 0 if power off for the first time, 
